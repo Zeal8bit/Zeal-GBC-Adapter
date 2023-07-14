@@ -1,0 +1,29 @@
+Name      ZealGBCDumper;
+Partno    ;
+Rev       01;
+Date      14/07/2023;
+Designer  Zeal;
+Company   Zeal8Bit;
+Location  None;
+Assembly  None;
+Device    G16V8;
+
+
+/** Inputs **/
+Pin 1 = CLK_PIN;
+Pin 2 = !MREQ;
+Pin 3 = A15;
+Pin 4 = A16;
+Pin 5 = A17;
+Pin 6 = A18;
+Pin 7 = A19;
+Pin 8 = A20;
+Pin 9 = A21;
+
+/** Outputs **/
+Pin 19 = !CS_SRAM;
+Pin 18 = !CS_ROM;
+
+/** Rules **/
+CS_ROM  = MREQ & A21 & A20 & A19 & A18 & A17 & A16 & !A15;
+CS_SRAM = MREQ & A21 & A20 & A19 & A18 & A17 & A16 & A15;
