@@ -61,8 +61,8 @@ static void map_cart_sram(uint8_t bank)
 {
     /* To switch the bank, write to cartridge address 0x4000 */
     map_cart_phys(0x4000);
-    /* Only keep the lower 2 bits */
-    cart_virt[0] = bank & 3;
+    /* Only keep the lower 4 bits */
+    cart_virt[0] = bank & 0xF;
     /* SRAM bank was mapped in the cartridge itself! Map the SRAM into the virtual page */
     map_cart_phys(0x8000);
 }
@@ -86,28 +86,52 @@ int main (void)
     uint16_t size = 15;
     write(DEV_STDOUT, name, &size);
 
-    /* Get the cartridge RAM size, located at offset 0x149 of the ROM. Needs a little conversion. */
-    const uint8_t* size_ptr = cart_virt + 0x149;
-    size = 0; // in KB
-    switch (*size_ptr) {
-        case 2:
-            size = 8;
-            break;
-        case 3:
-            size = 32;
-            break;
-        case 4:
-            size = 128;
-            break;
-        case 5:
-            size = 64;
-            break;
-        default:
-            break;
-    }
+    /* Get the cartridge type, located at offset 0x147 of the ROM. */
+    uint8_t bank_num;
+    uint16_t bank_size;
+    const uint8_t* type_ptr = cart_virt + 0x147;
+    uint8_t cart_type = *type_ptr;
 
     /* Previous "write" didn't output a newline, output it here before the string */
-    printf("\nCartridge RAM size: %d KB\n", size);
+    printf("\nCartridge type: 0x%hx\n", cart_type);
+    switch (cart_type) {
+        case 0x3: /* MBC1 + RAM + BATT */
+        case 0x10: /* ROM + RAM + BATT */
+        case 0x13: /* MBC3 + RAM + BATT */
+        case 0x1B: /* MBC5 + RAM + BATT */
+        case 0x1E: /* MBC5 + RUMBLE + RAM + BATT */
+            bank_size = GB_SRAM_BANK_SIZE;
+            /* Get the cartridge RAM size, located at offset 0x149 of the ROM. Needs a little conversion. */
+            const uint8_t* size_ptr = cart_virt + 0x149;
+            size = 0; // in KB
+            switch (*size_ptr) {
+                case 2:
+                    size = 8;
+                    break;
+                case 3:
+                    size = 32;
+                    break;
+                case 4:
+                    size = 128;
+                    break;
+                case 5:
+                    size = 64;
+                    break;
+                default:
+                    break;
+            }
+            bank_num = size >> 3;
+            printf("Cartridge RAM size: %d KB\n", size);
+            break;
+        case 0x6: /* MBC2 + RAM + BATT */
+            bank_size = 512;
+            bank_num = 1;
+            printf("Cartridge RAM size: %d B\n", bank_size);
+            break;
+        default:
+            printf("Unsupported cart type, exiting...\n");
+            exit();
+    }
 
     /* Enable the RAM: the first 8KB of the cartridge can be used to enable the cartridge RAM by writing 0xA to it */
     cart_virt[0] = 0xA;
@@ -117,16 +141,18 @@ int main (void)
      *
      * NOTE: We can only map physical pages multiple of 16KB! The solution is to map 0x4000 and write at address 0x2000.
      */
-    map_cart_phys(0x4000);
-    /* We need to write 1 to it to enable RAM banking (0 disables banking) */
-    cart_virt[0x2000] = 1;
+    if (cart_type == 0x3) { /* MBC1 Only */
+        map_cart_phys(0x4000);
+        /* We need to write 1 to it to enable RAM banking (0 disables banking) */
+        cart_virt[0x2000] = 1;
+    }
 
     /* Finally, let's use our own function to map the cartridge RAM. Let's hardcode the number of banks for the moment */
-    for (uint8_t bank = 0; bank < 4; bank++) {
+    for (uint8_t bank = 0; bank < bank_num; bank++) {
         map_cart_sram(bank);
         /* The SRAM 8KB bank is now mapped at GB_CART_VIRT_ADDR still, so we can access it with `cart_virt` array,
          * send the content to the UART. */
-        size = GB_SRAM_BANK_SIZE;
+        size = bank_size;
         write(uart_dev, cart_virt, &size);
     }
 
