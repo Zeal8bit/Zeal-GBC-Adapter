@@ -9,6 +9,11 @@
 #include "zos_errors.h"
 #include "zos_vfs.h"
 #include "zos_sys.h"
+#include "zos_serial.h"
+
+/* If the standard output is the same serial driver as the one used to backup the cartridge,
+ * we shall not output anything during the dump. After backing up, wait for a character before exiting. */
+#define STDOUT_IS_SERIAL    1
 
 /* Define different cartridges type */
 #define MBC1_RAM_BATT       0x3
@@ -43,6 +48,10 @@ uint8_t* cart_virt = (uint8_t*) GB_CART_VIRT_ADDR;
  */
 zos_dev_t uart_dev = 0;
 
+/**
+ * Attributes of the opened UART
+ */
+uint16_t uart_attr = 0;
 
 /**
  * @brief Helper function to map cartridge given address into virtual page 3
@@ -103,13 +112,43 @@ uint8_t cartridge_RAM_size(uint8_t size_value)
     return size;
 }
 
+static void wait_for_host(uint8_t bank_num, uint16_t bank_size)
+{
+    zos_err_t err;
+    uint16_t size = 0;
+    char msg[4] = { 0 };
+
+    printf("Ready to send, start the dump script on the host computer\n");
+    while (1) {
+        /* Wait for a message from the host */
+        size = 1;
+        err = read(uart_dev, msg, &size);
+
+        /* Make sure it is '!' */
+        if (err != ERR_SUCCESS || msg[0] != '!') {
+            printf("Invalid message from the host, please retry\n");
+            continue;
+        }
+
+        /* Send the number of banks and the bank size */
+        msg[0] = '=';
+        msg[1] = bank_num;
+        msg[2] = bank_size & 0xff;
+        msg[3] = bank_size >> 8;
+        size = 4;
+        write(uart_dev, msg, &size);
+        break;
+    }
+}
 
 int main (void)
 {
+    zos_err_t err;
+
     /* Open the serial driver to send the data to */
     uart_dev = open("#SER0", O_WRONLY);
     if (uart_dev < 0) {
-        printf("Error opening serial driver, exiting...\n");
+        printf("Error opening serial driver\n");
         exit();
     }
 
@@ -148,7 +187,24 @@ int main (void)
             break;
         default:
             printf("Unsupported cart type, exiting...\n");
-            exit();
+            goto err_close_exit;
+    }
+
+    /* Set the serial driver to RAW (to avoid \n to \r\n conversion) */
+    err = ioctl(uart_dev, SERIAL_CMD_GET_ATTR, (void*) &uart_attr);
+    if (err != ERR_SUCCESS) {
+        printf("Get attr error %d\n", err);
+        goto err_close_exit;
+    }
+
+    wait_for_host(bank_num, bank_size);
+
+    if ((uart_attr & SERIAL_ATTR_MODE_RAW) == 0) {
+        err = ioctl(uart_dev, SERIAL_CMD_SET_ATTR, (void*) (uart_attr | SERIAL_ATTR_MODE_RAW));
+        if (err != ERR_SUCCESS) {
+            printf("Set attr error %d\n", err);
+            goto err_close_exit;
+        }
     }
 
     /* Enable the RAM: the first 8KB of the cartridge can be used to enable the cartridge RAM by writing 0xA to it */
@@ -168,18 +224,28 @@ int main (void)
 
     /* Finally, let's use our own function to map the cartridge RAM. Let's hardcode the number of banks for the moment */
     for (uint8_t bank = 0; bank < bank_num; bank++) {
+        /* In the case where #SER0 is the same driver as the STDOUT, we shall not write anything to STDOUT while backup is on-going */
+#if !STDOUT_IS_SERIAL
         printf("Backing up bank %d...\n", bank);
+#endif
         map_cart_sram(bank);
         /* The SRAM 8KB bank is now mapped at GB_CART_VIRT_ADDR still, so we can access it with `cart_virt` array,
          * send the content to the UART. */
         size = bank_size;
-        zos_err_t err = write(uart_dev, cart_virt, &size);
+        err = write(uart_dev, cart_virt, &size);
         if (err != ERR_SUCCESS) {
             printf("Error %d, exiting\n", err);
-            break;
+            goto err_set_attr;
         }
     }
 
+err_set_attr:
+    /* Restore UART attributes before exiting */
+    if ((uart_attr & SERIAL_ATTR_MODE_RAW) == 0) {
+        ioctl(uart_dev, SERIAL_CMD_SET_ATTR, (void*) uart_attr);
+    }
+
+err_close_exit:
     /* Finished using the UART, close it */
     close(uart_dev);
 
