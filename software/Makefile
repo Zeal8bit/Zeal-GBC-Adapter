@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 # Specify the files to compile and the name of the final binary
 SRCS=main.c
-BIN=dump.bin
+BIN=gbdump.bin
 
 # Directory where source files are and where the binaries will be put
 INPUT_DIR=src
