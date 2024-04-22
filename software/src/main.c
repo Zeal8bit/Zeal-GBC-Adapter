@@ -66,7 +66,7 @@ static void map_cart_phys(uint16_t cart_addr)
         if (uart_dev) {
             close(uart_dev);
         }
-        exit();
+        exit(0);
     }
 }
 
@@ -149,7 +149,7 @@ int main (void)
     uart_dev = open("#SER0", O_WRONLY);
     if (uart_dev < 0) {
         printf("Error opening serial driver\n");
-        exit();
+        exit(0);
     }
 
     /* Start by mapping the fixed part of the ROM. It contains info about the cartridge itself.
